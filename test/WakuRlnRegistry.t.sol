@@ -2,6 +2,8 @@
 pragma solidity ^0.8.15;
 
 import "../contracts/WakuRlnRegistry.sol";
+import "../contracts/IPriceCalculator.sol";
+import "../contracts/LinearPriceCalculator.sol";
 import {PoseidonHasher} from "rln-contract/PoseidonHasher.sol";
 import {DuplicateIdCommitment, FullTree} from "rln-contract/RlnBase.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -15,11 +17,14 @@ contract WakuRlnRegistryTest is Test {
 
     WakuRlnRegistry public wakuRlnRegistry;
     PoseidonHasher public poseidonHasher;
+    IPriceCalculator public priceCalculator;
 
     function setUp() public {
+        LinearPriceCalculator p = new LinearPriceCalculator();
+        priceCalculator = IPriceCalculator(address(p));
         poseidonHasher = new PoseidonHasher();
         address implementation = address(new WakuRlnRegistry());
-        bytes memory data = abi.encodeCall(WakuRlnRegistry.initialize, address(poseidonHasher));
+        bytes memory data = abi.encodeCall(WakuRlnRegistry.initialize, (address(poseidonHasher), address(priceCalculator)));
         address proxy = address(new ERC1967Proxy(implementation, data));
         wakuRlnRegistry = WakuRlnRegistry(proxy);
     }

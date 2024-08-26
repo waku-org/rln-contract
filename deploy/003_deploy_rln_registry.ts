@@ -10,15 +10,24 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const poseidonHasherAddress = (await deployments.get("PoseidonHasher"))
     .address;
 
+  const priceCalculatorAddress = (
+    await deployments.get("WakuSimplePriceCalculator")
+  ).address;
+
   const implRes = await deploy("WakuRlnRegistry_Implementation", {
     contract: "WakuRlnRegistry",
     from: deployer,
     log: true,
   });
 
-  let initializeAbi = ["function initialize(address _poseidonHasher)"];
+  let initializeAbi = [
+    "function initialize(address _poseidonHasher, address _priceCalculator)",
+  ];
   let iface = new hre.ethers.utils.Interface(initializeAbi);
-  const data = iface.encodeFunctionData("initialize", [poseidonHasherAddress]);
+  const data = iface.encodeFunctionData("initialize", [
+    poseidonHasherAddress,
+    priceCalculatorAddress,
+  ]);
 
   await deploy("WakuRlnRegistry_Proxy", {
     contract: "ERC1967Proxy",
@@ -30,4 +39,4 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
 
 export default func;
 func.tags = ["WakuRlnRegistry"];
-func.dependencies = ["PoseidonHasher"];
+func.dependencies = ["PoseidonHasher", "WakuSimplePriceCalculator"];

@@ -2,6 +2,7 @@
 pragma solidity 0.8.15;
 
 import {WakuRln} from "./WakuRln.sol";
+import {Membership} from "./Membership.sol";
 import {IPoseidonHasher} from "rln-contract/PoseidonHasher.sol";
 import {UUPSUpgradeable} from "openzeppelin-contracts/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {OwnableUpgradeable} from "openzeppelin-contracts-upgradeable/contracts/access/OwnableUpgradeable.sol";
@@ -12,7 +13,7 @@ error NoStorageContractAvailable();
 error IncompatibleStorage();
 error IncompatibleStorageIndex();
 
-contract WakuRlnRegistry is OwnableUpgradeable, UUPSUpgradeable {
+contract WakuRlnRegistry is OwnableUpgradeable, UUPSUpgradeable, Membership {
     uint16 public nextStorageIndex;
     mapping(uint16 => address) public storages;
 
@@ -27,8 +28,14 @@ contract WakuRlnRegistry is OwnableUpgradeable, UUPSUpgradeable {
         _;
     }
 
-    function initialize(address _poseidonHasher) external initializer {
+    modifier onlyValidStorageIndex(uint16 storageIndex) {
+        if (storageIndex >= nextStorageIndex) revert NoStorageContractAvailable();
+        _;
+    }
+
+    function initialize(address _poseidonHasher, address _priceCalculator) external initializer {
         poseidonHasher = IPoseidonHasher(_poseidonHasher);
+        __Membership_init(_priceCalculator);
         __Ownable_init();
     }
 
@@ -54,6 +61,7 @@ contract WakuRlnRegistry is OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function register(uint256[] calldata commitments) external onlyUsableStorage {
+        // TODO: modify function to receive rate limit
         // iteratively check if the storage contract is full, and increment the usingStorageIndex if it is
         while (true) {
             try WakuRln(storages[usingStorageIndex]).register(commitments) {
@@ -72,16 +80,24 @@ contract WakuRlnRegistry is OwnableUpgradeable, UUPSUpgradeable {
         }
     }
 
-    function register(uint16 storageIndex, uint256[] calldata commitments) external {
-        if (storageIndex >= nextStorageIndex) revert NoStorageContractAvailable();
+    function register(uint16 storageIndex, uint256[] calldata commitments) external onlyValidStorageIndex(storageIndex) {
+        // TODO: modify function to receive the ratelimit to buy
+        uint _rateLimit = 4;
+        acquireRateLimit(commitments, _rateLimit);
+        transferMembershipFees(_msgSender(), _rateLimit * commitments.length);
         WakuRln(storages[storageIndex]).register(commitments);
     }
 
-    function register(uint16 storageIndex, uint256 commitment) external {
-        if (storageIndex >= nextStorageIndex) revert NoStorageContractAvailable();
+    function register(uint16 storageIndex, uint256 commitment) external payable onlyValidStorageIndex(storageIndex) {
         // optimize the gas used below
         uint256[] memory commitments = new uint256[](1);
         commitments[0] = commitment;
+
+        // TODO: modify function to receive the number of messages
+        uint _rateLimit = 4;
+        acquireRateLimit(commitments, _rateLimit);
+        transferMembershipFees(_msgSender(), _rateLimit);
+
         WakuRln(storages[storageIndex]).register(commitments);
     }
 
