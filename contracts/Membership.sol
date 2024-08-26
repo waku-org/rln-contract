@@ -63,4 +63,34 @@ contract Membership {
         // Membership expiration term 	T 	180 	days
         // Membership grace period 	G 	30 	days
     }
+
+    mapping (uint256 => TODO) memberships;
+    
+    uint256 private oldest = 1;
+    uint256 private newest = 1;
+
+    // TODO - use a struct to store the membership details: commitment, date, status
+    // TODO - keep track of balances, use msg.sender?
+
+    function pushMembership(TODO data) internal {
+        newest += 1;
+        memberships[newest] = data;
+    }
+
+    function oldestMembership() public TODO  {
+        return memberships[oldest];
+    }
+
+    function popOldestMembership() public returns (uint256) {
+        TODO data;
+        require(newest > oldest);
+        data = memberships[oldest];
+        delete memberships[oldest];
+        oldest += 1;
+        return data;
+    }
+
+    function length() public view returns (uint256) {
+        return newest - oldest;
+    }
 }
