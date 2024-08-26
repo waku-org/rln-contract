@@ -22,6 +22,8 @@ contract Membership {
     uint16 public maxRateLimitPerMembership;
     uint16 public minRateLimitPerMembership;
 
+    enum MembershipStatus { Undefined, Active, GracePeriod, Expired, ErasedAwaitsWithdrawal, Erased }
+
     uint public totalRateLimitPerEpoch;
 
     function __Membership_init(
