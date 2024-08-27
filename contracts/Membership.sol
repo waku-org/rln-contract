@@ -25,6 +25,8 @@ contract Membership {
     uint16 public maxRateLimitPerMembership;
     uint16 public minRateLimitPerMembership;
 
+    // TO-ASK: what happens with existing memberships if
+    // the expiration term and grace period are updated?
     uint256 public expirationTerm;
     uint256 public gracePeriod;
 
@@ -43,22 +45,25 @@ contract Membership {
     uint public totalRateLimitPerEpoch;
 
     mapping(uint256 => MembershipDetails) public memberships;
-    uint256 public oldestMembership = 1;
-    uint256 public newestMembership = 1;
+    uint256 public head = 0;
+    uint256 public tail = 0;
+    uint256 private nextID = 0;
 
     struct MembershipDetails {
         address holder;
         // TODO: should we store the commitment?
         uint256 expirationDate;
+        uint256 rateLimit;
         address token;
         uint256 amount;
+        uint prev; // index of the previous membership
+        uint next; // index of the next membership
     }
 
-    event ExpiredMembership(uint256 membershipMapIndex, address holder); // TODO: should it contain the commitment?
-    event MembershipExtended(
-        uint256 membershipMapIndex,
-        uint256 newExpirationDate
-    ); // TODO: should it contain the commitment?
+    // TODO: should it contain the commitment?
+    event ExpiredMembership(uint256 membershipMapIndex, address holder);
+    // TODO: should it contain the commitment?
+    event MembershipExtended(uint256 membershipMapIndex, uint256 newExpirationDate);
 
     function __Membership_init(
         address _priceCalculator,
@@ -84,18 +89,10 @@ contract Membership {
         // TODO: for each commitment
         (address token, uint amount) = priceCalculator.calculate(_rateLimit);
         acquireRateLimit(_sender, commitments, _rateLimit, token, amount);
-        transferMembershipFees(
-            _sender,
-            token,
-            amount * _rateLimit * commitments.length
-        );
+        transferMembershipFees(_sender, token, amount * _rateLimit * commitments.length);
     }
 
-    function transferMembershipFees(
-        address _from,
-        address _token,
-        uint _amount
-    ) internal {
+    function transferMembershipFees(address _from, address _token, uint _amount) internal {
         if (_token == address(0)) {
             if (msg.value != _amount) revert IncorrectAmount();
         } else {
@@ -112,29 +109,35 @@ contract Membership {
         uint256 _amount
     ) internal {
         // TODO: for each commitment
-        if (
-            _rateLimit < minRateLimitPerMembership ||
-            _rateLimit > maxRateLimitPerMembership
-        ) revert InvalidRateLimit();
+        if (_rateLimit < minRateLimitPerMembership || _rateLimit > maxRateLimitPerMembership)
+            revert InvalidRateLimit();
 
-        uint newTotalRateLimitPerEpoch = totalRateLimitPerEpoch + _rateLimit;
-
-        if (newTotalRateLimitPerEpoch > maxTotalRateLimitPerEpoch) {
+        // Attempt to free expired membership slots
+        while (totalRateLimitPerEpoch + _rateLimit > maxTotalRateLimitPerEpoch) {
             // Determine if there are any available spot in the membership map
-            // by looking at the oldest membership. If it's expired, we can use it
-            MembershipDetails storage oldestMembershipDetails = memberships[
-                oldestMembership
-            ];
+            // by looking at the oldest membership. If it's expired, we can free it
+            MembershipDetails storage oldestMembershipDetails = memberships[head];
 
-            if (isExpired(oldestMembershipDetails.expirationDate)) {
-                emit ExpiredMembership(
-                    oldestMembership,
-                    oldestMembershipDetails.holder
-                );
+            if (
+                oldestMembershipDetails.holder != address(0) && // membership has a holder
+                isExpired(oldestMembershipDetails.expirationDate)
+            ) {
+                emit ExpiredMembership(head, oldestMembershipDetails.holder);
 
-                // Pop the oldest membership
-                delete memberships[oldestMembership];
-                oldestMembership += 1;
+                // Deduct the expired membership rate limit
+                totalRateLimitPerEpoch -= oldestMembershipDetails.rateLimit;
+
+                // Remove the expired membership
+                uint256 nextOld = oldestMembershipDetails.next;
+                if (nextOld != 0) memberships[nextOld].prev = 0;
+
+                delete memberships[head];
+
+                if (tail == head) {
+                    // TODO: test this
+                    tail = 0;
+                }
+                head = nextOld;
 
                 // TODO: move balance from expired to the current holder
             } else {
@@ -142,33 +145,62 @@ contract Membership {
             }
         }
 
-        newestMembership += 1;
-        memberships[newestMembership] = MembershipDetails({
+        nextID++;
+
+        uint256 prev = 0;
+        if (tail != 0) {
+            MembershipDetails storage latestMembership = memberships[tail];
+            latestMembership.next = nextID;
+            prev = tail;
+        } else {
+            // First item
+            head = nextID;
+        }
+
+        totalRateLimitPerEpoch += _rateLimit;
+
+        memberships[nextID] = MembershipDetails({
             holder: _sender,
             expirationDate: block.timestamp + expirationTerm,
             token: _token,
-            amount: _amount
+            amount: _amount,
+            rateLimit: _rateLimit,
+            next: 0, // It's the last value, so point to nowhere
+            prev: prev
         });
+
+        tail = nextID;
     }
 
-    function extendMembership(
-        address _sender,
-        uint256[] memory membershipMapIdx
-    ) public {
+    function extendMembership(address _sender, uint256[] memory membershipMapIdx) public {
         for (uint256 i = 0; i < membershipMapIdx.length; i++) {
             uint256 idx = membershipMapIdx[i];
 
             MembershipDetails storage mdetails = memberships[idx];
 
-            if (!_isGracePeriod(mdetails.expirationDate))
-                revert NotInGracePeriod(idx);
+            if (!_isGracePeriod(mdetails.expirationDate)) revert NotInGracePeriod(idx);
 
             if (_sender != mdetails.holder) revert NotHolder(idx);
 
             uint256 newExpirationDate = block.timestamp + expirationTerm;
 
-            // TODO: remove current membership
-            // TODO: add membership at the end (since it will be the newest)
+            // Remove current membership references
+            if (mdetails.prev != 0) {
+                memberships[mdetails.prev].next = mdetails.next;
+            } else {
+                head = mdetails.next;
+            }
+
+            if (mdetails.next != 0) {
+                memberships[mdetails.next].prev = mdetails.prev;
+            } else {
+                tail = mdetails.prev;
+            }
+
+            // Add membership at the end (since it will be the newest)
+            mdetails.next = 0;
+            mdetails.prev = tail;
+            memberships[tail].next = idx;
 
             emit MembershipExtended(idx, newExpirationDate);
         }
@@ -182,17 +214,11 @@ contract Membership {
         return _isExpired(memberships[membershipMapIdx].expirationDate);
     }
 
-    function _isGracePeriod(
-        uint256 expirationDate
-    ) internal view returns (bool) {
-        return
-            block.timestamp >= expirationDate &&
-            block.timestamp <= expirationDate + gracePeriod;
+    function _isGracePeriod(uint256 expirationDate) internal view returns (bool) {
+        return block.timestamp >= expirationDate && block.timestamp <= expirationDate + gracePeriod;
     }
 
-    function isGracePeriod(
-        uint256 membershipMapIdx
-    ) public view returns (bool) {
+    function isGracePeriod(uint256 membershipMapIdx) public view returns (bool) {
         uint256 expirationDate = memberships[membershipMapIdx].expirationDate;
         return _isGracePeriod(expirationDate);
     }
@@ -201,15 +227,7 @@ contract Membership {
 
     // TODO - keep track of balances, use msg.sender
 
-    function getOldestMembership()
-        public
-        view
-        returns (MembershipDetails memory)
-    {
-        return memberships[oldestMembership];
-    }
-
-    function getMembershipLength() public view returns (uint256) {
-        return newestMembership - oldestMembership;
+    function getOldestMembership() public view returns (MembershipDetails memory) {
+        return memberships[head];
     }
 }
