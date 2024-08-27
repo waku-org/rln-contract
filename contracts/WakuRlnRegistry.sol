@@ -83,8 +83,7 @@ contract WakuRlnRegistry is OwnableUpgradeable, UUPSUpgradeable, Membership {
     function register(uint16 storageIndex, uint256[] calldata commitments) external onlyValidStorageIndex(storageIndex) {
         // TODO: modify function to receive the ratelimit to buy
         uint _rateLimit = 4;
-        acquireRateLimit(commitments, _rateLimit);
-        transferMembershipFees(_msgSender(), _rateLimit * commitments.length);
+        registerMembership(_msgSender(), commitments, _rateLimit);
         WakuRln(storages[storageIndex]).register(commitments);
     }
 
@@ -95,8 +94,7 @@ contract WakuRlnRegistry is OwnableUpgradeable, UUPSUpgradeable, Membership {
 
         // TODO: modify function to receive the number of messages
         uint _rateLimit = 4;
-        acquireRateLimit(commitments, _rateLimit);
-        transferMembershipFees(_msgSender(), _rateLimit);
+        registerMembership(_msgSender(), commitments, _rateLimit);
 
         WakuRln(storages[storageIndex]).register(commitments);
     }
