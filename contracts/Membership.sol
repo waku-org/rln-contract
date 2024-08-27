@@ -31,6 +31,7 @@ contract Membership {
     // TODO END
 
     enum MembershipStatus {
+        // TODO use in getter to determine state of membership?
         NonExistent,
         Active,
         GracePeriod,
@@ -80,7 +81,7 @@ contract Membership {
         uint256[] memory commitments,
         uint _rateLimit
     ) internal {
-        // TODO: for each commitment?
+        // TODO: for each commitment
         (address token, uint amount) = priceCalculator.calculate(_rateLimit);
         acquireRateLimit(_sender, commitments, _rateLimit, token, amount);
         transferMembershipFees(
@@ -110,7 +111,7 @@ contract Membership {
         address _token,
         uint256 _amount
     ) internal {
-        // TODO: for each commitment?
+        // TODO: for each commitment
         if (
             _rateLimit < minRateLimitPerMembership ||
             _rateLimit > maxRateLimitPerMembership
@@ -128,9 +129,13 @@ contract Membership {
             if (isExpired(oldestMembershipDetails.expirationDate)) {
                 emit ExpiredMembership(
                     oldestMembership,
-                    memberships[oldestMembership].holder
+                    oldestMembershipDetails.holder
                 );
-                deleteOldestMembership();
+
+                // Pop the oldest membership
+                delete memberships[oldestMembership];
+                oldestMembership += 1;
+
                 // TODO: move balance from expired to the current holder
             } else {
                 revert ExceedMaxRateLimitPerEpoch();
@@ -151,24 +156,21 @@ contract Membership {
         uint256[] memory membershipMapIdx
     ) public {
         for (uint256 i = 0; i < membershipMapIdx.length; i++) {
-            uint256 currentMembershipMapIdx = membershipMapIdx[i];
+            uint256 idx = membershipMapIdx[i];
 
-            MembershipDetails storage mdetails = memberships[
-                currentMembershipMapIdx
-            ];
+            MembershipDetails storage mdetails = memberships[idx];
 
             if (!_isGracePeriod(mdetails.expirationDate))
-                revert NotInGracePeriod(currentMembershipMapIdx);
+                revert NotInGracePeriod(idx);
 
-            if (_sender != mdetails.holder)
-                revert NotHolder(currentMembershipMapIdx);
+            if (_sender != mdetails.holder) revert NotHolder(idx);
 
             uint256 newExpirationDate = block.timestamp + expirationTerm;
 
             // TODO: remove current membership
             // TODO: add membership at the end (since it will be the newest)
 
-            emit MembershipExtended(currentMembershipMapIdx, newExpirationDate);
+            emit MembershipExtended(idx, newExpirationDate);
         }
     }
 
@@ -205,12 +207,6 @@ contract Membership {
         returns (MembershipDetails memory)
     {
         return memberships[oldestMembership];
-    }
-
-    function deleteOldestMembership() internal {
-        require(newestMembership > oldestMembership);
-        delete memberships[oldestMembership];
-        oldestMembership += 1;
     }
 
     function getMembershipLength() public view returns (uint256) {
