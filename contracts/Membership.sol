@@ -172,7 +172,7 @@ contract Membership {
         tail = nextID;
     }
 
-    function extendMembership(address _sender, uint256[] memory membershipMapIdx) public {
+    function extendMembership(address _sender, uint256[] calldata membershipMapIdx) public {
         for (uint256 i = 0; i < membershipMapIdx.length; i++) {
             uint256 idx = membershipMapIdx[i];
 
@@ -221,6 +221,16 @@ contract Membership {
     function isGracePeriod(uint256 membershipMapIdx) public view returns (bool) {
         uint256 expirationDate = memberships[membershipMapIdx].expirationDate;
         return _isGracePeriod(expirationDate);
+    }
+
+    function freeExpiredMemberships(uint256[] calldata expiredMemberships) public {
+        // TODO: user can pass a list of expired memberships and free them
+        // Might be useful because then offchain the user can determine which 
+        // expired memberships slots are available, and proceed to free them.
+        // This might be cheaper than the `while` loop used when registering
+        // memberships, although easily solved by having a function that receives
+        // the list of memberships to free, and the information for the new 
+        // membership to register
     }
 
     function withdraw() public {}
