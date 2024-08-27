@@ -197,12 +197,13 @@ contract Membership {
                 tail = mdetails.prev;
             }
 
-            // Move membership at the end (since it will be the newest)
+            // Move membership to the end (since it will be the newest)
             mdetails.next = 0;
             mdetails.prev = tail;
             mdetails.expirationDate = newExpirationDate;
-            
+
             memberships[tail].next = idx;
+            tail = idx;
 
             emit MembershipExtended(idx, newExpirationDate);
         }
