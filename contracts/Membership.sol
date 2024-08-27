@@ -197,9 +197,11 @@ contract Membership {
                 tail = mdetails.prev;
             }
 
-            // Add membership at the end (since it will be the newest)
+            // Move membership at the end (since it will be the newest)
             mdetails.next = 0;
             mdetails.prev = tail;
+            mdetails.expirationDate = newExpirationDate;
+            
             memberships[tail].next = idx;
 
             emit MembershipExtended(idx, newExpirationDate);
@@ -233,7 +235,9 @@ contract Membership {
         // membership to register
     }
 
-    function withdraw() public {}
+    function withdraw() public {
+        // TODO:
+    }
 
     // TODO - keep track of balances, use msg.sender
 
