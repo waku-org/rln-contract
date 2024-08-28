@@ -131,7 +131,7 @@ contract Membership {
         while (totalRateLimitPerEpoch + _rateLimit > maxTotalRateLimitPerEpoch) {
             // Determine if there are any available spot in the membership map
             // by looking at the oldest membership. If it's expired, we can free it
-            MembershipDetails storage oldestMembershipDetails = memberships[head];
+            MembershipDetails memory oldestMembershipDetails = memberships[head];
 
             if (
                 oldestMembershipDetails.holder != address(0) && // membership has a holder
@@ -202,17 +202,20 @@ contract Membership {
 
             uint256 newExpirationDate = block.timestamp + expirationTerm;
 
+            uint256 mdetailsNext = mdetails.next;
+            uint256 mdetailsPrev = mdetails.prev;
+
             // Remove current membership references
-            if (mdetails.prev != 0) {
-                memberships[mdetails.prev].next = mdetails.next;
+            if (mdetailsPrev != 0) {
+                memberships[mdetailsPrev].next = mdetailsNext;
             } else {
-                head = mdetails.next;
+                head = mdetailsNext;
             }
 
-            if (mdetails.next != 0) {
-                memberships[mdetails.next].prev = mdetails.prev;
+            if (mdetailsNext != 0) {
+                memberships[mdetailsNext].prev = mdetailsPrev;
             } else {
-                tail = mdetails.prev;
+                tail = mdetailsPrev;
             }
 
             // Move membership to the end (since it will be the newest)
