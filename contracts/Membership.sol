@@ -13,6 +13,7 @@ error TokenMismatch();
 error InvalidRateLimit();
 error ExceedMaxRateLimitPerEpoch();
 error NotInGracePeriod(uint256 membershipMapIdx);
+error NotExpired(uint256 membershipMapIdx);
 error NotHolder(uint256 membershipMapIdx);
 
 error InsufficientBalance();
@@ -24,13 +25,23 @@ contract Membership {
     // TODO START - add owned setters to all these variables
 
     IPriceCalculator public priceCalculator;
+
+    /// @notice Maximum total rate limit of all memberships in the tree
     uint32 public maxTotalRateLimitPerEpoch; // TO-ASK: what's the theoretical maximum rate limit per epoch we could set? uint32 accepts a max of 4292967295
+
+    /// @notice Maximum rate limit of one membership
     uint16 public maxRateLimitPerMembership; // TO-ASK: what's the theoretical maximum rate limit per epoch a single membership can have? this accepts 65535
+
+    /// @notice Minimum rate limit of one membership
     uint16 public minRateLimitPerMembership; // TO-ASK: what's the theoretical largest minimum rate limit per epoch a single membership can have? this accepts a minimum from 0 to 65535
 
     // TO-ASK: what happens with existing memberships if
     // the expiration term and grace period are updated?
+
+    /// @notice Membership expiration term
     uint256 public expirationTerm;
+
+    /// @notice Membership grace period
     uint256 public gracePeriod;
 
     // TODO END
@@ -41,24 +52,22 @@ contract Membership {
     // mapping and also remove the token setter and the `token`
     // attribute from the MembershipDetails
 
-    // holder ->  token -> balance
-    mapping(address => mapping(address => uint)) public expiredBalances;
+    /// @notice balances available to withdraw
+    mapping(address => mapping(address => uint)) public balancesToWithdraw; // holder ->  token -> balance
 
-    enum MembershipStatus {
-        // TODO use in getter to determine state of membership?
-        NonExistent,
-        Active,
-        GracePeriod,
-        Expired,
-        ErasedAwaitsWithdrawal,
-        Erased
-    }
-
+    /// @notice Total rate limit of all memberships in the tree
     uint public totalRateLimitPerEpoch;
 
+    /// @notice List of registered memberships
     mapping(uint256 => MembershipDetails) public memberships;
-    uint256 public head = 0;
-    uint256 public tail = 0;
+
+    /// @dev Oldest membership
+    uint256 private head = 0;
+
+    /// @dev Newest membership
+    uint256 private tail = 0;
+
+    /// @dev Autoincrementing ID for memberships
     uint256 private nextID = 0;
 
     // TODO: associate membership details with commitment
@@ -96,18 +105,18 @@ contract Membership {
         gracePeriod = _gracePeriod;
     }
 
-    function registerMembership(
+    function _addMembership(
         address _sender,
         uint256[] memory commitments,
         uint16 _rateLimit
     ) internal {
         // TODO: for each commitment
         (address token, uint256 amount) = priceCalculator.calculate(_rateLimit);
-        acquireRateLimit(_sender, commitments, _rateLimit, token, amount);
-        transferFees(_sender, token, amount * _rateLimit * commitments.length);
+        _setupMembershipDetails(_sender, commitments, _rateLimit, token, amount);
+        _transferFees(_sender, token, amount * _rateLimit * commitments.length);
     }
 
-    function transferFees(address _from, address _token, uint256 _amount) internal {
+    function _transferFees(address _from, address _token, uint256 _amount) internal {
         if (_token == address(0)) {
             if (msg.value != _amount) revert IncorrectAmount();
         } else {
@@ -116,7 +125,7 @@ contract Membership {
         }
     }
 
-    function acquireRateLimit(
+    function _setupMembershipDetails(
         address _sender,
         uint256[] memory _commitments,
         uint16 _rateLimit,
@@ -142,18 +151,23 @@ contract Membership {
                 // Deduct the expired membership rate limit
                 totalRateLimitPerEpoch -= oldestMembershipDetails.rateLimit;
 
-                // Remove the expired membership
-                uint256 nextOld = oldestMembershipDetails.next;
-                if (nextOld != 0) memberships[nextOld].prev = 0;
-
-                if (tail == head) {
-                    // TODO: test this
-                    tail = 0;
+                // Remove expired membership references
+                uint256 detailsNext = oldestMembershipDetails.next;
+                uint256 detailsPrev = oldestMembershipDetails.prev;
+                if (detailsPrev != 0) {
+                    memberships[detailsPrev].next = detailsNext;
+                } else {
+                    head = detailsNext;
                 }
-                head = nextOld;
+
+                if (detailsNext != 0) {
+                    memberships[detailsNext].prev = detailsPrev;
+                } else {
+                    tail = detailsPrev;
+                }
 
                 // Move balance from expired membership to holder balance
-                expiredBalances[oldestMembershipDetails.holder][
+                balancesToWithdraw[oldestMembershipDetails.holder][
                     oldestMembershipDetails.token
                 ] += oldestMembershipDetails.amount;
 
@@ -190,7 +204,7 @@ contract Membership {
         tail = nextID;
     }
 
-    function extendMembership(address _sender, uint256[] calldata membershipMapIdx) public {
+    function _extendMembership(address _sender, uint256[] calldata membershipMapIdx) public {
         for (uint256 i = 0; i < membershipMapIdx.length; i++) {
             uint256 idx = membershipMapIdx[i];
 
@@ -247,34 +261,67 @@ contract Membership {
         return _isGracePeriod(expirationDate);
     }
 
-    function freeExpiredMemberships(uint256[] calldata expiredMemberships) public {
-        // TODO: user can pass a list of expired memberships and free them
+    function eraseExpiredMemberships(uint256[] calldata expiredMembershipsIdx) public {
         // Might be useful because then offchain the user can determine which
         // expired memberships slots are available, and proceed to free them.
         // This might be cheaper than the `while` loop used when registering
         // memberships, although easily solved by having a function that receives
         // the list of memberships to free, and the information for the new
         // membership to register
-    }
 
-    // TODO: expire owned memberships?
+        for (uint256 i = 0; i < expiredMembershipsIdx.length; i++) {
+            uint256 idx = expiredMembershipsIdx[i];
+            MembershipDetails memory mdetails = memberships[idx];
 
-    function withdraw(address token) public {
-        // TODO: getSender()  
-        uint256 amount = expiredBalances[msg.sender][token];
-        require(amount > 0, "Insufficient balance");
+            if (!_isExpired(mdetails.expirationDate)) revert NotExpired(idx);
 
-        expiredBalances[msg.sender][token] = 0;
-        if (token == address(0)) {
-            // ETH
-            (bool success, ) = msg.sender.call{value: amount}("");
-            require(success, "eth transfer failed");
-        } else {
-            IERC20(token).safeTransfer(msg.sender, amount);
+            // TODO: this code is repeated in other places, maybe it
+            // makes sense to extract to an internal function?
+
+            // Move balance from expired membership to holder balance
+            balancesToWithdraw[mdetails.holder][mdetails.token] += mdetails.amount;
+
+            // Deduct the expired membership rate limit
+            totalRateLimitPerEpoch -= mdetails.rateLimit;
+
+            // Remove current membership references
+            if (mdetails.prev != 0) {
+                memberships[mdetails.prev].next = mdetails.next;
+            } else {
+                head = mdetails.next;
+            }
+
+            if (mdetails.next != 0) {
+                memberships[mdetails.next].prev = mdetails.prev;
+            } else {
+                tail = mdetails.prev;
+            }
+
+            delete memberships[idx];
         }
     }
 
-    function getOldestMembership() public view returns (MembershipDetails memory) {
+    // TODO: withdraw grace period or expired memberships
+    //       should be similar to previous function except that
+    //       it will check if the membership is in grace period
+    //       or is expired, and also if it's owned by whoever calls
+    //       the function.
+
+    function _withdraw(address _sender, address token) internal {
+        uint256 amount = balancesToWithdraw[_sender][token];
+        require(amount > 0, "Insufficient balance");
+
+        balancesToWithdraw[_sender][token] = 0;
+        if (token == address(0)) {
+            // ETH
+            (bool success, ) = _sender.call{value: amount}("");
+            require(success, "eth transfer failed");
+        } else {
+            IERC20(token).safeTransfer(_sender, amount);
+        }
+    }
+
+    function oldestMembership() public view returns (MembershipDetails memory) {
         return memberships[head];
     }
 }
