@@ -39,18 +39,12 @@ contract Membership {
     // the expiration term and grace period are updated?
 
     /// @notice Membership expiration term
-    uint256 public expirationTerm;
+    uint32 public expirationTerm; // TO-ASK - confirm maximum expiration term possible
 
     /// @notice Membership grace period
-    uint256 public gracePeriod;
+    uint32 public gracePeriod; // TOTO-ASKDO - confirm maximum expiration term possible
 
     // TODO END
-
-    // TO-ASK: is it possible that in the future we change the
-    // token used by the contract? if yes, then it makes sense to
-    // have this balance as a mapping. If not, we can simplify this
-    // mapping and also remove the token setter and the `token`
-    // attribute from the MembershipDetails
 
     /// @notice balances available to withdraw
     mapping(address => mapping(address => uint)) public balancesToWithdraw; // holder ->  token -> balance
@@ -77,8 +71,9 @@ contract Membership {
         uint256 prev; // index of the previous membership
         uint256 next; // index of the next membership
         // Membership data
-        uint256 expirationDate;
         uint256 amount;
+        uint256 gracePeriodStartDate;
+        uint32 gracePeriod;
         uint16 rateLimit;
         address holder;
         address token;
@@ -94,8 +89,8 @@ contract Membership {
         uint32 _maxTotalRateLimitPerEpoch,
         uint16 _maxRateLimitPerMembership,
         uint16 _minRateLimitPerMembership,
-        uint256 _expirationTerm,
-        uint256 _gracePeriod
+        uint32 _expirationTerm,
+        uint32 _gracePeriod
     ) internal {
         priceCalculator = IPriceCalculator(_priceCalculator);
         maxTotalRateLimitPerEpoch = _maxTotalRateLimitPerEpoch;
@@ -144,26 +139,18 @@ contract Membership {
 
             if (
                 oldestMembershipDetails.holder != address(0) && // membership has a holder
-                isExpired(oldestMembershipDetails.expirationDate)
+                isExpired(oldestMembershipDetails.gracePeriodStartDate)
             ) {
                 emit ExpiredMembership(head, oldestMembershipDetails.holder);
 
                 // Deduct the expired membership rate limit
                 totalRateLimitPerEpoch -= oldestMembershipDetails.rateLimit;
 
-                // Remove expired membership references
-                uint256 detailsNext = oldestMembershipDetails.next;
-                uint256 detailsPrev = oldestMembershipDetails.prev;
-                if (detailsPrev != 0) {
-                    memberships[detailsPrev].next = detailsNext;
-                } else {
-                    head = detailsNext;
-                }
-
-                if (detailsNext != 0) {
-                    memberships[detailsNext].prev = detailsPrev;
-                } else {
-                    tail = detailsPrev;
+                // Promote the next oldest membership to oldest
+                uint256 nextOldestId = oldestMembershipDetails.next;
+                head = nextOldestId;
+                if (nextOldestId != 0) {
+                    memberships[nextOldestId].prev = 0;
                 }
 
                 // Move balance from expired membership to holder balance
@@ -186,6 +173,7 @@ contract Membership {
             prev = tail;
         } else {
             // First item
+            // TODO: test adding memberships after the list has been emptied
             head = nextID;
         }
 
@@ -193,7 +181,8 @@ contract Membership {
 
         memberships[nextID] = MembershipDetails({
             holder: _sender,
-            expirationDate: block.timestamp + expirationTerm,
+            gracePeriodStartDate: block.timestamp + expirationTerm,
+            gracePeriod: gracePeriod,
             token: _token,
             amount: _amount,
             rateLimit: _rateLimit,
@@ -210,7 +199,8 @@ contract Membership {
 
             MembershipDetails storage mdetails = memberships[idx];
 
-            if (!_isGracePeriod(mdetails.expirationDate)) revert NotInGracePeriod(idx);
+            if (!_isGracePeriod(mdetails.gracePeriodStartDate, mdetails.gracePeriod))
+                revert NotInGracePeriod(idx);
 
             if (_sender != mdetails.holder) revert NotHolder(idx);
 
@@ -235,7 +225,8 @@ contract Membership {
             // Move membership to the end (since it will be the newest)
             mdetails.next = 0;
             mdetails.prev = tail;
-            mdetails.expirationDate = newExpirationDate;
+            mdetails.gracePeriodStartDate = newExpirationDate;
+            mdetails.gracePeriod = gracePeriod;
 
             memberships[tail].next = idx;
             tail = idx;
@@ -244,21 +235,31 @@ contract Membership {
         }
     }
 
-    function _isExpired(uint256 expirationDate) internal view returns (bool) {
-        return expirationDate + gracePeriod > block.timestamp;
+    function _isExpired(
+        uint256 _gracePeriodStartDate,
+        uint256 _gracePeriod
+    ) internal view returns (bool) {
+        return _gracePeriodStartDate + _gracePeriod > block.timestamp;
     }
 
     function isExpired(uint256 membershipMapIdx) public view returns (bool) {
-        return _isExpired(memberships[membershipMapIdx].expirationDate);
+        MembershipDetails memory m = memberships[membershipMapIdx];
+        return _isExpired(m.gracePeriodStartDate, m.gracePeriod);
     }
 
-    function _isGracePeriod(uint256 expirationDate) internal view returns (bool) {
-        return block.timestamp >= expirationDate && block.timestamp <= expirationDate + gracePeriod;
+    function _isGracePeriod(
+        uint256 _gracePeriodStartDate,
+        uint256 _gracePeriod
+    ) internal view returns (bool) {
+        uint256 blockTimestamp = block.timestamp;
+        return
+            blockTimestamp >= _gracePeriodStartDate &&
+            blockTimestamp <= _gracePeriodStartDate + _gracePeriod;
     }
 
     function isGracePeriod(uint256 membershipMapIdx) public view returns (bool) {
-        uint256 expirationDate = memberships[membershipMapIdx].expirationDate;
-        return _isGracePeriod(expirationDate);
+        MembershipDetails memory m = memberships[membershipMapIdx];
+        return _isGracePeriod(m.gracePeriodStartDate, m.gracePeriod);
     }
 
     function eraseExpiredMemberships(uint256[] calldata expiredMembershipsIdx) public {
@@ -273,7 +274,8 @@ contract Membership {
             uint256 idx = expiredMembershipsIdx[i];
             MembershipDetails memory mdetails = memberships[idx];
 
-            if (!_isExpired(mdetails.expirationDate)) revert NotExpired(idx);
+            if (!_isExpired(mdetails.gracePeriodStartDate, mdetails.gracePeriod))
+                revert NotExpired(idx);
 
             // TODO: this code is repeated in other places, maybe it
             // makes sense to extract to an internal function?
