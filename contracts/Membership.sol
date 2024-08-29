@@ -15,6 +15,7 @@ error ExceedMaxRateLimitPerEpoch();
 error NotInGracePeriod(uint256 membershipMapIdx);
 error NotExpired(uint256 membershipMapIdx);
 error NotHolder(uint256 membershipMapIdx);
+error CantEraseMembership(uint256 membershipMapIdx);
 
 error InsufficientBalance();
 error FailedTransfer();
@@ -262,23 +263,29 @@ contract Membership {
         return _isGracePeriod(m.gracePeriodStartDate, m.gracePeriod);
     }
 
-    function eraseExpiredMemberships(uint256[] calldata expiredMembershipsIdx) public {
+    function eraseMemberships(address _sender, uint256[] calldata expiredMembershipsIdx) public {
         // Might be useful because then offchain the user can determine which
         // expired memberships slots are available, and proceed to free them.
         // This might be cheaper than the `while` loop used when registering
         // memberships, although easily solved by having a function that receives
         // the list of memberships to free, and the information for the new
         // membership to register
+        // This is also used to erase memberships in grace period if they're held
+        // by the sender. The sender can then withdraw the tokens
 
         for (uint256 i = 0; i < expiredMembershipsIdx.length; i++) {
             uint256 idx = expiredMembershipsIdx[i];
             MembershipDetails memory mdetails = memberships[idx];
 
-            if (!_isExpired(mdetails.gracePeriodStartDate, mdetails.gracePeriod))
-                revert NotExpired(idx);
-
-            // TODO: this code is repeated in other places, maybe it
-            // makes sense to extract to an internal function?
+            bool isMembershipExpired = _isExpired(
+                mdetails.gracePeriodStartDate,
+                mdetails.gracePeriod
+            );
+            bool isGracePeriodAndOwned = _isGracePeriod(
+                mdetails.gracePeriodStartDate,
+                mdetails.gracePeriod
+            ) && mdetails.holder == _sender;
+            if (!isMembershipExpired || !isGracePeriodAndOwned) revert CantEraseMembership(idx);
 
             // Move balance from expired membership to holder balance
             balancesToWithdraw[mdetails.holder][mdetails.token] += mdetails.amount;
@@ -302,12 +309,6 @@ contract Membership {
             delete memberships[idx];
         }
     }
-
-    // TODO: withdraw grace period or expired memberships
-    //       should be similar to previous function except that
-    //       it will check if the membership is in grace period
-    //       or is expired, and also if it's owned by whoever calls
-    //       the function.
 
     function _withdraw(address _sender, address token) internal {
         uint256 amount = balancesToWithdraw[_sender][token];
